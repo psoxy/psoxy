@@ -1,0 +1,87 @@
+services:
+  server:
+    image: shkatebi97/webui
+    container_name: server
+    build: .
+    environment:
+      - LOCAL_ADDR=0.0.0.0
+      - LOCAL_PORT=${END_SERVER_PORT}
+      - REMOTE_ADDR=0.0.0.0
+      - REMOTE_PORT=0
+      - LOCAL_UUID=${END_SERVER_UUID}
+      - MODE=server
+    expose:
+      - ${END_SERVER_PORT}/tcp
+    networks:
+      default:
+        ipv4_address: ${END_SERVER_IP}
+  relay:
+    image: shkatebi97/webui
+    container_name: relay
+    build: .
+    environment:
+      - LOCAL_ADDR=0.0.0.0
+      - LOCAL_PORT=${RELAY_SERVER_PORT}
+      - LOCAL_UUID=${RELAY_SERVER_UUID}
+      - REMOTE_ADDR=${END_SERVER_IP}
+      - REMOTE_PORT=${END_SERVER_PORT}
+      - REMOTE_UUID=${END_SERVER_UUID}
+      - MODE=relay
+    expose:
+      - ${RELAY_SERVER_PORT}/tcp
+    networks:
+      default:
+        ipv4_address: ${RELAY_SERVER_IP}
+  client:
+    image: shkatebi97/webui
+    container_name: client
+    build: .
+    environment:
+      - LOCAL_ADDR=0.0.0.0
+      - LOCAL_PORT=${START_SERVER_PORT}
+      - REMOTE_ADDR=${END_SERVER_IP}
+      - REMOTE_PORT=${END_SERVER_PORT}
+      - REMOTE_UUID=${END_SERVER_UUID}
+      - MODE=client
+    expose:
+      - "${START_SERVER_PORT}/tcp"
+      - "${START_SERVER_PORT}/udp"
+    networks:
+      default:
+        ipv4_address: ${START_SERVER_IP}
+  mock-client:
+    depends_on:
+      - mock-server
+    image: shkatebi97/webui
+    container_name: mock-client
+    build: .
+    environment:
+      - REMOTE_ADDR=${START_SERVER_IP}
+      - REMOTE_PORT=${START_SERVER_PORT}
+      - MOCK_ADDR=${MOCK_SERVER_IP}
+      - MOCK_PORT=${MOCK_SERVER_PORT}
+      - MOCK_TEST=${MOCK_TEST}
+      - MODE=mock-client
+    networks:
+      default:
+        ipv4_address: ${MOCK_CLIENT_IP}
+  mock-server:
+    image: shkatebi97/webui
+    container_name: mock-server
+    build: .
+    environment:
+      - LOCAL_ADDR=0.0.0.0
+      - LOCAL_PORT=${MOCK_SERVER_PORT}
+      - MODE=mock-server
+    expose:
+      - "${MOCK_SERVER_PORT}/tcp"
+      - "${MOCK_SERVER_PORT}/udp"
+    networks:
+      default:
+        ipv4_address: ${MOCK_SERVER_IP}
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${DOCKER_NETWORK}
