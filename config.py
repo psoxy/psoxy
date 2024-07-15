@@ -6,8 +6,8 @@ BUFSIZE = 16384
 SEND_CHUNK_SIZE = 2048
 TIMEOUT_SOCKET = 5
 LOCAL_ADDR = "0.0.0.0"
-LOCAL_PORT = 1563
-LOCAL_UUID = ""
+LOCAL_PORT = 2151
+LOCAL_UUID = "19237dd2-65a9-4783-9ca6-6202dfffe4b5"
 # Parameter to bind a socket to a device, using SO_BINDTODEVICE
 # Only root can set this option
 # If the name is an empty string or None, the interface is chosen when
@@ -48,7 +48,7 @@ SERVER_PORT = 443
 SERVER_UUID = "19237dd2-65a9-4783-9ca6-6202dfffe4b5"
 SERVERS = []
 for i in range(1):
-    SERVERS.append(("172.93.144.163", 443 + i, '19237dd2-65a9-4783-9ca6-6202dfffe4b5'))
+    SERVERS.append(("127.0.0.1", 2151 + i, '19237dd2-65a9-4783-9ca6-6202dfffe4b5'))
 # MOCK
 SMALL_SIZE=256
 MEDIUM_SIZE=1024

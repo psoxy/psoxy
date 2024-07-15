@@ -19,7 +19,7 @@ import random
 import string
 from optparse import OptionParser
 from aes import AESCipher
-import base64
+from psoxysocket import PsoxySocket
 
 parser = OptionParser()
 parser.add_option("-c", "--use-external-config",
@@ -28,6 +28,12 @@ parser.add_option("-c", "--use-external-config",
 parser.add_option("-v", "--verbose",
                   action="store_true", dest="verbose", default=False,
                   help="be more verbose")
+parser.add_option("--local-host", action="store", dest="local_host", default="0.0.0.0")
+parser.add_option("--local-port", action="store", dest="local_port", default="25663")
+parser.add_option("--remote-host", action="store", dest="remote_host", default="127.0.0.1")
+parser.add_option("--remote-port", action="store", dest="remote_port", default="2153")
+parser.add_option("--remote-uuid", action="store", dest="remote_uuid", default='b050bc40-d8be-45df-aabc-60e0515d935a')
+
 
 (options, args) = parser.parse_args()
 
@@ -39,10 +45,11 @@ else:
     #
     MAX_THREADS = 200
     BUFSIZE = 16384
-    SEND_CHUNK_SIZE = 1024
+    SEND_UDP_CHUNK_SIZE = 65536
+    SEND_CHUNK_SIZE = 16384
     TIMEOUT_SOCKET = 5
-    LOCAL_ADDR = '0.0.0.0'
-    LOCAL_PORT = 25663
+    LOCAL_ADDR = options.local_host
+    LOCAL_PORT = int(options.local_port)
     # Parameter to bind a socket to a device, using SO_BINDTODEVICE
     # Only root can set this option
     # If the name is an empty string or None, the interface is chosen when
@@ -63,6 +70,8 @@ else:
     '''Command constants'''
     # CONNECT '01'
     CMD_CONNECT = b'\x01'
+    # BIND '03'
+    CMD_BIND = b'\x03'
     '''Address type constants'''
     # IP V4 address '01'
     ATYP_IPV4 = b'\x01'
@@ -76,14 +85,20 @@ else:
     RANDOM_PACKET_LEN_RANGE=(256,1024)
     # SERVER
     SERVER_OK=b'OK'
+    SERVER_ADDR=options.remote_host
+    SERVER_PORT=int(options.remote_port)
+    SERVER_UUID=options.remote_uuid
     SERVERS = [
-        ("127.0.0.1", 2153, 'b050bc40-d8be-45df-aabc-60e0515d935a'),
+        (SERVER_ADDR, SERVER_PORT, SERVER_UUID),
     ]
-    SERVER_PORT=2153
-    SERVER_ADDR="127.0.0.1"
-    SERVER_UUID='b050bc40-d8be-45df-aabc-60e0515d935a'
 
 NUM_SERVERS = len(SERVERS)
+TCP_TRANSPORT = b'\x00'
+UDP_TRANSPORT = b'\x01'
+known_transports = [
+    TCP_TRANSPORT,
+    UDP_TRANSPORT,
+]
 
 def random_server():
     return SERVERS[random.randrange(NUM_SERVERS)]
@@ -118,27 +133,43 @@ def error(msg="", err=None):
         traceback.print_exc()
 
 
-def proxy_loop(socket_src, socket_dst, dst_type, dst_ip, dst_port, teid: int, aes_server):
+def proxy_loop(socket_src: PsoxySocket, socket_dst: PsoxySocket, teid: int, aes_server):
     """ Wait for network activity """
     prev_size_segment = b''
     is_recving = False
     is_recving_size = 0
     is_recving_buffer = b''
+    _socket_side_udp_src = socket_src.get_side_udp_socket()
+    _socket_src = socket_src.get_socket()
+    _socket_dst = socket_dst.get_socket()
+    sockets = {
+        _socket_side_udp_src: socket_src,
+        _socket_src: socket_src,
+        _socket_dst: socket_dst,
+    }
     while not EXIT.get_status():
         try:
-            reader, _, _ = select.select([socket_src, socket_dst], [], [], 1)
+            if _socket_side_udp_src is not None:
+                reader, _, _ = select.select([_socket_side_udp_src, _socket_src, _socket_dst], [], [], 1)
+            else:
+                reader, _, _ = select.select([_socket_src, _socket_dst], [], [], 1)
         except select.error as err:
             error("Select failed", err)
             return
         if not reader:
             continue
         try:
-            for sock in reader:
-                if sock is socket_dst:
+            # reader = list(map(lambda sock: sockets[sock], reader))
+            for _sock in reader:
+                sock = sockets[_sock]
+                if _sock is _socket_dst:
                     if options.verbose: 
                         print("Receiving")
                     if is_recving:
-                        data = sock.recv(SEND_CHUNK_SIZE)
+                        if _socket_side_udp_src is not None:
+                            data = sock.recv(SEND_UDP_CHUNK_SIZE)
+                        else:
+                            data = sock.recv(SEND_CHUNK_SIZE)
                         if not data:
                             return
                         is_recving_buffer = is_recving_buffer + data
@@ -184,8 +215,11 @@ def proxy_loop(socket_src, socket_dst, dst_type, dst_ip, dst_port, teid: int, ae
                         prev_size_segment = b''
                         if options.verbose: 
                             print("Going to receive with size:", is_recving_size)
-                else:
-                    data = sock.recv(SEND_CHUNK_SIZE)
+                elif _sock is _socket_side_udp_src or _sock is _socket_src:
+                    if _socket_side_udp_src is not None:
+                        data = sock.recv(SEND_UDP_CHUNK_SIZE)
+                    else:
+                        data = sock.recv(SEND_CHUNK_SIZE)
                     if not data:
                         return
                     data_packet = aes_server.encrypt(data)
@@ -194,13 +228,10 @@ def proxy_loop(socket_src, socket_dst, dst_type, dst_ip, dst_port, teid: int, ae
                         print(len(data), "->", len(size_packet),  len(data_packet))
                     socket_dst.send(size_packet)
                     socket_dst.send(data_packet)
-                    # for i in range(0, len(data), SEND_CHUNK_SIZE):
-                    #     payload = data[i:i+SEND_CHUNK_SIZE]
-                    #     packet = aes_server.encrypt(payload)
-                    #     print(len(payload), payload, len(base64.b64encode(payload)))
-                    #     print(len(packet), packet)
-                    #     socket_dst.send(packet)
-                    #     # sleep(0.001)
+                else:
+                    data = sock.recv(SEND_CHUNK_SIZE)
+                    if not data:
+                        return
         except socket.error as err:
             error("Loop failed", err)
             return
@@ -208,7 +239,7 @@ def proxy_loop(socket_src, socket_dst, dst_type, dst_ip, dst_port, teid: int, ae
 
 def connect_to_dst(dst_addr, dst_port):
     """ Connect to desired destination """
-    sock, teid = create_socket()
+    sock, teid = create_socket(socket.SOCK_STREAM)
     if OUTGOING_INTERFACE:
         try:
             sock.setsockopt(
@@ -230,9 +261,9 @@ def connect_to_dst(dst_addr, dst_port):
 
 def request_client(wrapper):
     """ Client request details """
-    # +----+-----+-------+------+----------+----------+
-    # |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
-    # +----+-----+-------+------+----------+----------+
+    # +-----+-----+-------+------+----------+----------+
+    # | VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+    # +-----+-----+-------+------+----------+----------+
     try:
         s5_request = wrapper.recv(BUFSIZE)
     except ConnectionResetError:
@@ -241,12 +272,17 @@ def request_client(wrapper):
         error()
         return False
     # Check VER, CMD and RSV
+    _VER, _CMD, _RSV = s5_request[0:1], s5_request[1:2], s5_request[2:3]
     if (
-            s5_request[0:1] != VER or
-            s5_request[1:2] != CMD_CONNECT or
-            s5_request[2:3] != b'\x00'
+        _VER != VER or
+        (_CMD != CMD_CONNECT and _CMD != CMD_BIND) or
+        _RSV != b'\x00'
     ):
         return False
+    dst_trans = 0
+    if _CMD == CMD_BIND:
+        dst_trans = 1
+
     # IPV4
     if s5_request[3:4] == ATYP_IPV4:
         dst_type = 0
@@ -261,11 +297,13 @@ def request_client(wrapper):
         dst_port = unpack('>H', port_to_unpack)[0]
     else:
         return False
-    print(dst_addr, dst_port)
-    return (dst_type, dst_addr, dst_port)
+    if isinstance(dst_addr, str):
+        print(f"{'udp' if dst_trans else 'tcp'}://{dst_addr}:{dst_port}")
+    else:
+        print(f"{'udp' if dst_trans else 'tcp'}://{dst_addr.decode()}:{dst_port}")
+    return (dst_type, dst_addr, dst_port, dst_trans)
 
-
-def request(wrapper):
+def request(wrapper: PsoxySocket):
     """
         The SOCKS request information is sent by the client as soon as it has
         established a connection to the SOCKS server, and completed the
@@ -274,9 +312,9 @@ def request(wrapper):
     """
     dst = request_client(wrapper)
     # Server Reply
-    # +----+-----+-------+------+----------+----------+
-    # |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
-    # +----+-----+-------+------+----------+----------+
+    # +-----+-----+-------+------+----------+----------+
+    # | VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+    # +-----+-----+-------+------+----------+----------+
     rep = b'\x07'
     bnd = b'\x00' + b'\x00' + b'\x00' + b'\x00' + b'\x00' + b'\x00'
     if dst:
@@ -287,29 +325,40 @@ def request(wrapper):
         rep = b'\x01'
     else:
         rep = b'\x00'
-        bnd = socket.inet_aton(socket_dst.getsockname()[0])
-        bnd += pack(">H", socket_dst.getsockname()[1])
+        if dst[3]:
+            wrapper.add_side_udp_socket()
+            wrapper.bind(("", 0))
+            src_bind_spec = wrapper.getsockname()
+            print(src_bind_spec)
+            bnd = socket.inet_aton(src_bind_spec[0])
+            bnd += pack(">H", src_bind_spec[1])
+        else:
+            bnd = socket.inet_aton(socket_dst.getsockname()[0])
+            bnd += pack(">H", socket_dst.getsockname()[1])
+
 
     # Connect to server
     if rep == b'\x00':
         _random_packet = random_packet().encode()
         aes_server = AESCipher(SEND_CHUNK_SIZE, selected_server[2])
         if dst[0] == 0: # IPv4
-            header = pack("!HHHHB4s4s",
+            header = pack("!HHHHBB4s4s",
                 0,
                 len(_random_packet),
-                dst[2],
+                0 if dst[3] else dst[2],
                 0,
+                int.from_bytes(known_transports[dst[3]], sys.byteorder),
                 0,
                 socket.inet_aton(dst[1]),
                 socket.inet_aton("0.0.0.0")
             )
         else: # Host Name
-            header = pack("!HHHHBH",
+            header = pack("!HHHHBBH",
                 0,
                 len(_random_packet),
-                dst[2],
+                0 if dst[3] else dst[2],
                 0,
+                int.from_bytes(known_transports[dst[3]], sys.byteorder),
                 1,
                 len(dst[1])
             ) + dst[1] + pack("!4s",
@@ -339,7 +388,8 @@ def request(wrapper):
         return
     # start proxy
     if rep == b'\x00':
-        proxy_loop(wrapper, socket_dst, dst[0], dst[1], dst[2], teid, aes_server)
+        # wrapper_udp = create_udp_for_tcp(wrapper)
+        proxy_loop(wrapper, socket_dst, teid, aes_server)
     if wrapper != 0:
         wrapper.close()
     if dst and socket_dst != 0:
@@ -406,10 +456,14 @@ def connection(wrapper):
         request(wrapper)
 
 
-def create_socket():
+def create_socket(custom_socket_type = None):
     """ Create an INET, STREAMing socket """
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        
+        if custom_socket_type is None:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        else:
+            sock = PsoxySocket(custom_socket_type)
         sock.settimeout(TIMEOUT_SOCKET)
     except socket.error as err:
         error("Failed to create socket", err)
@@ -454,12 +508,13 @@ def exit_handler(signum, frame):
     """ Signal handler called with signal, exit script """
     print('Signal handler called with signal', signum)
     EXIT.set_status(True)
+    exit(signum)
 
 
 def main():
     """ Main function """
     print("Starting client")
-    new_socket, _ = create_socket()
+    new_socket, _ = create_socket(socket.SOCK_STREAM)
     bind_port(new_socket)
     signal(SIGINT, exit_handler)
     signal(SIGTERM, exit_handler)

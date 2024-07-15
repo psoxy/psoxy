@@ -13,6 +13,7 @@ from time import sleep
 import sys
 from optparse import OptionParser
 from aes import AESCipher
+from psoxysocket import PsoxySocket
 
 parser = OptionParser()
 parser.add_option("-c", "--use-external-config",
@@ -21,9 +22,9 @@ parser.add_option("-c", "--use-external-config",
 parser.add_option("-v", "--verbose",
                   action="store_true", dest="verbose", default=False,
                   help="be more verbose")
-parser.add_option("-p", "--port",
-                  action="store", dest="port", default=None,
-                  help="set the port")
+parser.add_option("-H", "--host", action="store", dest="host", default="0.0.0.0")
+parser.add_option("-p", "--port", action="store", dest="port", default="2152")
+parser.add_option("-u", "--uuid", action="store", dest="uuid", default='b050bc40-d8be-45df-aabc-60e0515d935a')
 
 (options, args) = parser.parse_args()
 
@@ -35,11 +36,12 @@ else:
     #
     MAX_THREADS = 200
     BUFSIZE = 16384
+    SEND_UDP_CHUNK_SIZE = 65536
     SEND_CHUNK_SIZE = 1024
     TIMEOUT_SOCKET = 5
-    LOCAL_ADDR = '0.0.0.0'
-    LOCAL_PORT = 2152
-    LOCAL_UUID='19237dd2-65a9-4783-9ca6-6202dfffe4b5'
+    LOCAL_ADDR = options.host
+    LOCAL_PORT = int(options.port)
+    LOCAL_UUID=options.uuid
     OUTGOING_INTERFACE = ""
     # GTP HEADER TEMPLATE
     GTP_HEADER_FLAGS=48
@@ -47,6 +49,17 @@ else:
     GTP_HEADER_ID=b"\x00\x00\x79\x32"
     # SERVER OK
     SERVER_OK=b'OK'
+
+TCP_TRANSPORT = b'\x00'
+UDP_TRANSPORT = b'\x01'
+known_transports = [
+    TCP_TRANSPORT,
+    UDP_TRANSPORT,
+]
+transport_map = [
+    socket.SOCK_STREAM,
+    socket.SOCK_DGRAM,
+]
 
 PRINT_PREFIX=""
 
@@ -79,24 +92,33 @@ def error(msg="", err=None):
     else:
         traceback.print_exc()
 
-def proxy_loop(socket_src, socket_dst, teid: int, aes_client):
+def proxy_loop(socket_src: PsoxySocket, socket_dst: PsoxySocket, teid: int, aes_client):
     """ Wait for network activity """
     prev_size_segment = b''
     is_recving = False
     is_recving_size = 0
     is_recving_buffer = b''
+    _socket_src = socket_src.get_socket()
+    _socket_dst = socket_dst.get_socket()
+    sockets = {}
+    sockets[_socket_src] = socket_src
+    sockets[_socket_dst] = socket_dst
     while not EXIT.get_status():
         try:
-            reader, _, _ = select.select([socket_src, socket_dst], [], [], 1)
+            reader, _, _ = select.select([_socket_src, _socket_dst], [], [], 1)
         except select.error as err:
             error("Select failed", err)
             return
         if not reader:
             continue
         try:
+            reader = list(map(lambda sock: sockets[sock], reader))
             for sock in reader:
                 if sock is socket_dst:
-                    data = sock.recv(BUFSIZE)
+                    if socket_dst.type == socket.SOCK_DGRAM:
+                        data = sock.recv(SEND_UDP_CHUNK_SIZE)
+                    else:
+                        data = sock.recv(BUFSIZE)
                     if not data:
                         return
                     data_packet = aes_client.encrypt(data)
@@ -105,17 +127,12 @@ def proxy_loop(socket_src, socket_dst, teid: int, aes_client):
                         print(PRINT_PREFIX, len(data), "->", len(size_packet),  len(data_packet))
                     socket_src.send(size_packet)
                     socket_src.send(data_packet)
-                    # TODO: Should create a very big packet and encrypt it (with padding)
-                    #       and send it with the length at the begining 4 bytes and then send
-                    #       the rest so that the client know what to expect and can wait until
-                    #       it receives full block
-                    # for i in range(0, len(data), SEND_CHUNK_SIZE):
-                    #     payload = data[i:i+SEND_CHUNK_SIZE]
-                    #     socket_src.send(aes_client.encrypt(payload))
-                        # sleep(0.001)
                 else:
                     if is_recving:
-                        data = sock.recv(SEND_CHUNK_SIZE)
+                        if socket_dst.type == socket.SOCK_DGRAM:
+                            data = sock.recv(SEND_UDP_CHUNK_SIZE)
+                        else:
+                            data = sock.recv(SEND_CHUNK_SIZE)
                         if not data:
                             return
                         is_recving_buffer = is_recving_buffer + data
@@ -161,14 +178,13 @@ def proxy_loop(socket_src, socket_dst, teid: int, aes_client):
                         prev_size_segment = b''
                         if options.verbose:
                             print(PRINT_PREFIX, "Going to receive with size:", is_recving_size)
-                        # socket_dst.send(payload)
         except socket.error as err:
             error("Loop failed", err)
             return
 
-def connect_to_dst(dst_addr, dst_port):
+def connect_to_dst(dst_addr, dst_port, dst_trans):
     """ Connect to desired destination """
-    sock = create_socket()
+    sock = create_socket(transport_map[dst_trans])
     if OUTGOING_INTERFACE:
         try:
             sock.setsockopt(
@@ -188,9 +204,9 @@ def connect_to_dst(dst_addr, dst_port):
 
 def request_client(wrapper, aes_client):
     """ Client request details """
-    # +-----+----+-----+----------+----------+------+----------+----------+
-    # | GTP | ID | LEN | DST.PORT | SRC.PORT | ATYP | DST.ADDR | SRC.ADDR |
-    # +-----+----+-----+----------+----------+------+----------+----------+
+    # +-----+----+-----+----------+----------+-----------+------+----------+----------+
+    # | GTP | ID | LEN | DST.PORT | SRC.PORT | TRANSPORT | ATYP | DST.ADDR | SRC.ADDR |
+    # +-----+----+-----+----------+----------+-----------+------+----------+----------+
     try:
         gtp_request = wrapper.recv(BUFSIZE)
     except ConnectionResetError:
@@ -212,17 +228,19 @@ def request_client(wrapper, aes_client):
     teid = unpack("!4s", gtp_request[4:8])[0]
 
     decrypted_gtp_request = aes_client.decrypt(gtp_request[8:])
-    
-    _, _, dst_port, _, atype = unpack("!HHHHB", decrypted_gtp_request[:9])
+    _, _, dst_port, _, dst_trans, atype = unpack("!HHHHBB", decrypted_gtp_request[:10])
     atype = int(atype)
-
+    if int(dst_trans).to_bytes(1, sys.byteorder) not in known_transports:
+        print(PRINT_PREFIX, "wrong transport:", dst_trans, "->", decrypted_gtp_request[0:20])
+        return False
+    
     # IPV4
     if atype == 0:
-        dst_addr = socket.inet_ntoa(decrypted_gtp_request[9:13])
+        dst_addr = socket.inet_ntoa(decrypted_gtp_request[10:14])
     # DOMAIN NAME
     elif atype == 1:
-        dst_addr_size = unpack('>H', decrypted_gtp_request[9:11])[0]
-        dst_addr = decrypted_gtp_request[11: 11 + dst_addr_size]
+        dst_addr_size = unpack('>H', decrypted_gtp_request[10:12])[0]
+        dst_addr = decrypted_gtp_request[12: 12 + dst_addr_size]
     else:
         return False
     
@@ -234,20 +252,20 @@ def request_client(wrapper, aes_client):
             teid
     ) + ack_payload)
 
-    print(PRINT_PREFIX, dst_addr, dst_port)
-    return (dst_addr, dst_port, teid)
+    if isinstance(dst_addr, str):
+        print(PRINT_PREFIX, f"{'udp' if dst_trans else 'tcp'}://{dst_addr}:{dst_port}")
+    else:
+        print(PRINT_PREFIX, f"{'udp' if dst_trans else 'tcp'}://{dst_addr.decode()}:{dst_port}")
+    return (dst_addr, dst_port, dst_trans, teid)
 
 def request(wrapper):
     aes_client = AESCipher(SEND_CHUNK_SIZE, LOCAL_UUID)
     dst = request_client(wrapper, aes_client)
     if dst:
-        # socket_dst = connect_to_dst(dst[0], dst[1])
-        teid = dst[2]
-        dst = dst[:2]
-        socket_dst = connect_to_dst(dst[0], dst[1])
+        teid = dst[3]
+        socket_dst = connect_to_dst(*dst[:3])
     # start proxy
     if dst and socket_dst != 0:
-        # TODO: add AES encryption and decryption during data transfer to all modules
         proxy_loop(wrapper, socket_dst, teid, aes_client)
     if wrapper != 0:
         wrapper.close()
@@ -258,10 +276,13 @@ def connection(wrapper):
     """ Function run by a thread """
     request(wrapper)
 
-def create_socket():
+def create_socket(custom_socket_type = None):
     """ Create an INET, STREAMing socket """
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if custom_socket_type is None:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        else:
+            sock = PsoxySocket(custom_socket_type)
         sock.settimeout(TIMEOUT_SOCKET)
     except socket.error as err:
         error("Failed to create socket", err)
@@ -308,7 +329,7 @@ def exit_handler(signum, frame):
 def main():
     """ Main function """
     print(PRINT_PREFIX, "Starting server")
-    new_socket = create_socket()
+    new_socket = create_socket(socket.SOCK_STREAM)
     bind_port(new_socket)
     signal(SIGINT, exit_handler)
     signal(SIGTERM, exit_handler)

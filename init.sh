@@ -6,7 +6,7 @@ if [[ ! -z $LOCAL_ADDR ]]; then
     echo "LOCAL_ADDR=$LOCAL_ADDR"
     sed -i -e "s/ENV_LOCAL_ADDR/\"$LOCAL_ADDR\"/g" config.py
 else
-    LOCAL_ADDR=0.0.0.0
+    export LOCAL_ADDR=0.0.0.0
     echo "LOCAL_ADDR=$LOCAL_ADDR"
     sed -i -e "s/ENV_LOCAL_ADDR/\"$LOCAL_ADDR\"/g" config.py
 fi
@@ -15,7 +15,7 @@ if [[ ! -z $LOCAL_PORT ]]; then
     echo "LOCAL_PORT=$LOCAL_PORT"
     sed -i -e "s/ENV_LOCAL_PORT/$LOCAL_PORT/g" config.py
 else
-    LOCAL_PORT=2152
+    export LOCAL_PORT=2152
     echo "LOCAL_PORT=$LOCAL_PORT"
     sed -i -e "s/ENV_LOCAL_PORT/$LOCAL_PORT/g" config.py
 fi
@@ -24,7 +24,7 @@ if [[ ! -z $REMOTE_ADDR ]]; then
     echo "REMOTE_ADDR=$REMOTE_ADDR"
     sed -i -e "s/ENV_REMOTE_ADDR/\"$REMOTE_ADDR\"/g" config.py
 else
-    REMOTE_ADDR="127.0.0.1"
+    export REMOTE_ADDR="127.0.0.1"
     echo "REMOTE_ADDR=$REMOTE_ADDR"
     sed -i -e "s/ENV_REMOTE_ADDR/\"$REMOTE_ADDR\"/g" config.py
 fi
@@ -33,7 +33,7 @@ if [[ ! -z $REMOTE_PORT ]]; then
     echo "REMOTE_PORT=$REMOTE_PORT"
     sed -i -e "s/ENV_REMOTE_PORT/$REMOTE_PORT/g" config.py
 else
-    REMOTE_PORT=2153
+    export REMOTE_PORT=2153
     echo "REMOTE_PORT=$REMOTE_PORT"
     sed -i -e "s/ENV_REMOTE_PORT/$REMOTE_PORT/g" config.py
 fi
@@ -42,7 +42,7 @@ if [[ ! -z $LOCAL_UUID ]]; then
     echo "LOCAL_UUID=$LOCAL_UUID"
     sed -i -e "s/ENV_LOCAL_UUID/\"$LOCAL_UUID\"/g" config.py
 else
-    LOCAL_UUID=b050bc40-d8be-45df-aabc-60e0515d935a
+    export LOCAL_UUID=b050bc40-d8be-45df-aabc-60e0515d935a
     echo "LOCAL_UUID=$LOCAL_UUID"
     sed -i -e "s/ENV_LOCAL_UUID/\"$LOCAL_UUID\"/g" config.py
 fi
@@ -51,7 +51,7 @@ if [[ ! -z $REMOTE_UUID ]]; then
     echo "REMOTE_UUID=$REMOTE_UUID"
     sed -i -e "s/ENV_REMOTE_UUID/\"$REMOTE_UUID\"/g" config.py
 else
-    REMOTE_UUID=b050bc40-d8be-45df-aabc-60e0515d935a
+    export REMOTE_UUID=b050bc40-d8be-45df-aabc-60e0515d935a
     echo "REMOTE_UUID=$REMOTE_UUID"
     sed -i -e "s/ENV_REMOTE_UUID/\"$REMOTE_UUID\"/g" config.py
 fi
@@ -60,7 +60,7 @@ if [[ ! -z $MOCK_ADDR ]]; then
     echo "MOCK_ADDR=$MOCK_ADDR"
     sed -i -e "s/ENV_MOCK_ADDR/\"$MOCK_ADDR\"/g" config.py
 else
-    MOCK_ADDR=0.0.0.0
+    export MOCK_ADDR=0.0.0.0
     echo "MOCK_ADDR=$MOCK_ADDR"
     sed -i -e "s/ENV_MOCK_ADDR/\"$MOCK_ADDR\"/g" config.py
 fi
@@ -69,7 +69,7 @@ if [[ ! -z $MOCK_PORT ]]; then
     echo "MOCK_PORT=$MOCK_PORT"
     sed -i -e "s/ENV_MOCK_PORT/$MOCK_PORT/g" config.py
 else
-    MOCK_PORT=5000
+    export MOCK_PORT=5000
     echo "MOCK_PORT=$MOCK_PORT"
     sed -i -e "s/ENV_MOCK_PORT/$MOCK_PORT/g" config.py
 fi
@@ -78,9 +78,18 @@ if [[ ! -z $MOCK_TEST ]]; then
     echo "MOCK_TEST=$MOCK_TEST"
     sed -i -e "s/ENV_MOCK_TEST/\"$MOCK_TEST\"/g" config.py
 else
-    MOCK_TEST=default
+    export MOCK_TEST=default
     echo "MOCK_TEST=$MOCK_TEST"
     sed -i -e "s/ENV_MOCK_TEST/\"$MOCK_TEST\"/g" config.py
+fi
+
+if [[ ! -z $REMOTE_NUM ]]; then
+    echo "REMOTE_NUM=$REMOTE_NUM"
+    sed -i -e "s/ENV_REMOTE_NUM/$REMOTE_NUM/g" config.py
+else
+    export REMOTE_NUM=1
+    echo "REMOTE_NUM=$REMOTE_NUM"
+    sed -i -e "s/ENV_REMOTE_NUM/$REMOTE_NUM/g" config.py
 fi
 
 if [[ ! -z $MODE ]]; then
@@ -89,6 +98,7 @@ if [[ ! -z $MODE ]]; then
     elif [[ $MODE == relay ]]; then
         python -u /app/psoxy-relay.py -c
     elif [[ $MODE == client ]]; then
+        /entry.sh &
         python -u /app/psoxy-client.py -c
     elif [[ $MODE == mock-client ]]; then
         python -u /app/client.py -c

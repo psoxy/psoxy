@@ -1,0 +1,175 @@
+{
+  "log": {
+    "loglevel": "info"
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "handshake": 5,
+        "connIdle": 300,
+        "uplinkOnly": 2,
+        "downlinkOnly": 5,
+        "statsUserUplink": false,
+        "statsUserDownlink": false,
+        "bufferSize": 10240
+      }
+    }
+  },
+  "inbounds": [
+    {
+      "port": $PORT,
+      "protocol": "$P",
+      "settings": {
+        "clients": [
+            {
+              "alterId": 0,
+              "id": "$UUID",
+              "password": "$UUID",
+              "level": 1,
+              "email": "lv@ran.com"
+            }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "$NETWORK",
+        "security": "none",
+        "wsSettings": {
+            // "acceptProxyProtocol" : true ,
+            "path" : "$X_PATH"
+        },
+        "grpcSettings": {
+          "serviceName": "$X_PATH"
+        }
+      },
+      "tag": "vm"
+    }
+  ],
+  "outbounds": [
+  //   {
+  //     "mux": {
+  //       "concurrency": 8,
+  //       "enabled": false
+  //     },
+  //     "protocol": "$CP",
+  //     "settings": {
+  //       "vnext": [
+  //         {
+  //           "address": "$CADDR",
+  //           "port": $CPORT,
+  //           "users": [
+  //             {
+  //               "alterId": 0,
+  //               "encryption": "none",
+  //               "flow": "",
+  //               "id": "$CUUID",
+  //               "level": 8,
+  //               "security": "auto"
+  //             }
+  //           ]
+  //         }
+  //       ]
+  //     },
+  //     "streamSettings": {
+  //       "network": "$CNETWORK",
+  //       "security": "$CTLS",
+  //       "tlsSettings": {
+  //         "allowInsecure": true,
+  //         "serverName": "$CHOST",
+  //         "fingerprint": "chrome"
+  //       },
+  //       "wsSettings": {
+  //         "path": "$CX_PATH",
+  //         "headers": {
+  //           "Host": "$CHOST"
+  //         }
+  //       },
+  //       "grpcSettings": {
+  //         "serviceName": "$CX_PATH"
+  //       }
+  //     },
+  //     "tag": "proxychain"
+  // },
+  {
+    "protocol": "socks",
+    "settings": {
+      "servers": [
+        {
+          "address": "127.0.0.1",
+          "port": $PSOXY_PORT
+        }
+      ]
+    },
+    "tag": "proxychain"
+  },
+  {
+    "protocol": "socks",
+    "settings": {
+      "servers": [
+        {
+          "address": "127.0.0.1",
+          "port": $SOCKS_PORT
+        }
+      ]
+    },
+    "tag": "proxywg"
+  },
+  {
+    "protocol": "freedom",
+    "settings": {},
+    "tag": "direct"
+  },
+  {
+      "tag": "blocked",
+      "protocol": "blackhole",
+      "settings": {}
+  }
+  ],
+  "dns": {
+    "servers": ["https+local://1.1.1.1/dns-query", "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "4.2.2.4", "localhost"]
+  },
+  "routing": {
+    "domainMatcher": "mph",
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "outboundTag": "blocked",
+        "domain": [
+          "geosite:category-ads-all",
+          "ext:iran.dat:ads"
+        ]
+      },
+      {
+        "type": "field",
+        "outboundTag": "direct",
+        "ip": [
+          "geoip:private",
+          "geoip:ir"
+        ]
+      },
+      {
+        "type": "field",
+        "outboundTag": "direct",
+        "domain": [
+          "regexp:.*\\.ir$",
+          "ext:iran.dat:ir",
+          "ext:iran.dat:other",
+          "geosite:category-ir"
+        ]
+      },
+      {
+        "inboundTag": ["vm"],
+        "outboundTag": "$OUT",
+        "balancerTag": "balancer",
+        "type": "field"
+      }
+    ],
+    "balancers": [
+      {
+        "tag": "balancer",
+        "selector": ["proxychain", "direct", "proxywg"]
+      }
+    ]
+  }
+}
