@@ -37,7 +37,7 @@ else:
     MAX_THREADS = 200
     BUFSIZE = 16384
     SEND_UDP_CHUNK_SIZE = 65536
-    SEND_CHUNK_SIZE = 1024
+    SEND_CHUNK_SIZE = 16384
     TIMEOUT_SOCKET = 5
     LOCAL_ADDR = options.host
     LOCAL_PORT = int(options.port)
